@@ -20,4 +20,4 @@ src-tauri/binaries/*.toml
 .DS_Store
 
 # CI-built bundles downloaded for local testing
-/ci-artifacts/
+/ci-artifacts*/
