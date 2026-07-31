@@ -19,6 +19,11 @@ pub fn disconnect(app: AppHandle, state: State<AppState>) -> Result<(), AetherEr
 }
 
 #[tauri::command]
+pub fn submit_access_code(state: State<AppState>, code: String) -> Result<(), AetherError> {
+    aether::submit_access_code(&state.manager, code)
+}
+
+#[tauri::command]
 pub fn get_status(state: State<AppState>) -> ConnectionState {
     state.manager.lock().unwrap().status()
 }

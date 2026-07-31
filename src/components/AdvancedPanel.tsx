@@ -13,6 +13,8 @@ import { IpVersionToggle } from "@/components/IpVersionToggle";
 import { MasqueTransportToggle } from "@/components/MasqueTransportToggle";
 import { NoizeProfileToggle } from "@/components/NoizeProfileToggle";
 import { BindAddressField } from "@/components/BindAddressField";
+import { ZeroTrustSettings } from "@/components/ZeroTrustSettings";
+import { RoutingSettings } from "@/components/RoutingSettings";
 import { useConnectionStore } from "@/state/connectionStore";
 
 function FieldRow({
@@ -116,6 +118,18 @@ export function AdvancedPanel() {
               tooltip="The local address Aether's SOCKS5 proxy listens on. Change the port to avoid conflicts, or enable LAN to share the tunnel with other devices on your network."
             >
               <BindAddressField />
+            </FieldRow>
+            <FieldRow
+              label="Zero Trust (organization)"
+              tooltip="Connect as a managed Cloudflare Zero Trust device instead of anonymous consumer WARP. Works with MASQUE and WireGuard. Leave the team empty for normal one-click mode."
+            >
+              <ZeroTrustSettings />
+            </FieldRow>
+            <FieldRow
+              label="DNS & Routing"
+              tooltip="Optional Aether 1.5 controls for DNS inside the tunnel and rules that block a destination or send it directly outside the tunnel."
+            >
+              <RoutingSettings />
             </FieldRow>
 
             <div className="flex items-center justify-between">

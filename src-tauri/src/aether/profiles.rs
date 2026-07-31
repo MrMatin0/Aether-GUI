@@ -134,6 +134,53 @@ pub struct ConnectionProfile {
     /// 127.0.0.1:1819; users can change the port or bind to 0.0.0.0 for LAN.
     #[serde(default = "default_bind_address")]
     pub bind_address: String,
+    /// Aether ≥1.5.0: optional resolvers used *inside* the tunnel. Kept as
+    /// Aether's comma-separated CLI format, for example `1.1.1.1,1.0.0.1`.
+    #[serde(default)]
+    pub dns: String,
+    /// Aether ≥1.5.0: Cloudflare Zero Trust organization name. An empty
+    /// value means the normal consumer WARP flow.
+    #[serde(default)]
+    pub zero_trust_team: String,
+    /// Which Zero Trust credential field is active in the GUI. This controls
+    /// what is handed to the core, rather than being a core flag itself.
+    #[serde(default)]
+    pub zero_trust_auth: ZeroTrustAuth,
+    /// Email used for Cloudflare Access one-time-code sign-in. Sensitive
+    /// values are erased before the successful profile is persisted.
+    #[serde(default)]
+    pub access_email: String,
+    /// Cloudflare Access service-token client id.
+    #[serde(default)]
+    pub access_client_id: String,
+    /// Cloudflare Access service-token secret.
+    #[serde(default)]
+    pub access_client_secret: String,
+    /// A pre-obtained Cloudflare Access enrolment JWT.
+    #[serde(default)]
+    pub access_token: String,
+    /// Route HTTP/HTTPS through the organization's Gateway proxy. This is
+    /// intentionally off by default because the organization can log it.
+    #[serde(default)]
+    pub zero_trust_gateway: bool,
+    /// Aether ≥1.5.0 routing lists. Entries are comma/newline separated in
+    /// the same format accepted by `--route-block` and `--route-direct`.
+    #[serde(default)]
+    pub route_block: String,
+    #[serde(default)]
+    pub route_direct: String,
+    /// Optional path to an Aether routing file with [block]/[direct] sections.
+    #[serde(default)]
+    pub routes_file: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ZeroTrustAuth {
+    #[default]
+    Email,
+    Service,
+    Token,
 }
 
 fn default_true() -> bool {
@@ -160,7 +207,7 @@ impl ConnectionProfile {
     /// "reconnect with last gateway?" question, which the GUI must never
     /// leave unanswered.
     pub fn as_args(&self) -> Vec<String> {
-        let mut args = Vec::with_capacity(10);
+        let mut args = Vec::with_capacity(20);
         match self.protocol {
             Protocol::Auto => {}
             Protocol::Masque => args.push("--masque".into()),
@@ -179,13 +226,20 @@ impl ConnectionProfile {
             IpVersion::V6 => "-6".into(),
             IpVersion::Both => "--dual".into(),
         });
-        args.push(if self.quick_reconnect { "--quick-reconnect".into() } else { "--no-quick-reconnect".into() });
+        args.push(if self.quick_reconnect {
+            "--quick-reconnect".into()
+        } else {
+            "--no-quick-reconnect".into()
+        });
         // Noize profile — pick the value matching the active protocol family.
         args.push("--noize".into());
-        args.push(match self.protocol {
-            Protocol::Auto | Protocol::Masque => self.masque_noize.as_flag(),
-            Protocol::Wireguard | Protocol::Gool => self.wg_noize.as_flag(),
-        }.into());
+        args.push(
+            match self.protocol {
+                Protocol::Auto | Protocol::Masque => self.masque_noize.as_flag(),
+                Protocol::Wireguard | Protocol::Gool => self.wg_noize.as_flag(),
+            }
+            .into(),
+        );
         // Only forward --bind when non-default and parseable.
         if self.bind_address != default_bind_address()
             && self.bind_address.parse::<std::net::SocketAddr>().is_ok()
@@ -193,7 +247,58 @@ impl ConnectionProfile {
             args.push("--bind".into());
             args.push(self.bind_address.clone());
         }
+        if !self.dns.trim().is_empty() {
+            args.push("--dns".into());
+            args.push(self.dns.trim().into());
+        }
+        if !self.zero_trust_team.trim().is_empty() {
+            args.push("--team".into());
+            args.push(self.zero_trust_team.trim().into());
+            if self.zero_trust_gateway {
+                args.push("--gateway".into());
+            }
+        }
+        if !self.route_block.trim().is_empty() {
+            args.push("--route-block".into());
+            args.push(self.route_block.trim().into());
+        }
+        if !self.route_direct.trim().is_empty() {
+            args.push("--route-direct".into());
+            args.push(self.route_direct.trim().into());
+        }
+        if !self.routes_file.trim().is_empty() {
+            args.push("--routes".into());
+            args.push(self.routes_file.trim().into());
+        }
         args
+    }
+
+    /// The core accepts Zero Trust credentials as flags too, but putting a
+    /// JWT or service secret in the process command line exposes it to other
+    /// local processes. pty.rs supplies the selected credential as an env var
+    /// instead, and this method ensures only that one method is ever sent.
+    pub fn zero_trust_env(&self) -> Option<(&'static str, &str)> {
+        if self.zero_trust_team.trim().is_empty() {
+            return None;
+        }
+        match self.zero_trust_auth {
+            ZeroTrustAuth::Email if !self.access_email.trim().is_empty() => {
+                Some(("AETHER_ACCESS_EMAIL", self.access_email.trim()))
+            }
+            ZeroTrustAuth::Service
+                if !self.access_client_id.trim().is_empty()
+                    && !self.access_client_secret.trim().is_empty() =>
+            {
+                // The id and secret need separate variables, so this method
+                // cannot represent service credentials. pty.rs handles that
+                // pair directly after consulting `zero_trust_auth`.
+                None
+            }
+            ZeroTrustAuth::Token if !self.access_token.trim().is_empty() => {
+                Some(("AETHER_ACCESS_TOKEN", self.access_token.trim()))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -213,7 +318,10 @@ mod tests {
         let mut p = ConnectionProfile::default();
         p.bind_address = "127.0.0.1:1919".into();
         let args = p.as_args();
-        let i = args.iter().position(|a| a == "--bind").expect("missing --bind");
+        let i = args
+            .iter()
+            .position(|a| a == "--bind")
+            .expect("missing --bind");
         assert_eq!(args.get(i + 1).map(String::as_str), Some("127.0.0.1:1919"));
     }
 
@@ -222,7 +330,10 @@ mod tests {
         let mut p = ConnectionProfile::default();
         p.bind_address = "0.0.0.0:1819".into();
         let args = p.as_args();
-        let i = args.iter().position(|a| a == "--bind").expect("missing --bind");
+        let i = args
+            .iter()
+            .position(|a| a == "--bind")
+            .expect("missing --bind");
         assert_eq!(args.get(i + 1).map(String::as_str), Some("0.0.0.0:1819"));
     }
 
@@ -231,7 +342,10 @@ mod tests {
         let mut p = ConnectionProfile::default();
         p.bind_address = "0.0.0.0:9999".into();
         let args = p.as_args();
-        let i = args.iter().position(|a| a == "--bind").expect("missing --bind");
+        let i = args
+            .iter()
+            .position(|a| a == "--bind")
+            .expect("missing --bind");
         assert_eq!(args.get(i + 1).map(String::as_str), Some("0.0.0.0:9999"));
     }
 
@@ -255,8 +369,59 @@ mod tests {
     fn default_emits_noize() {
         let p = ConnectionProfile::default();
         let args = p.as_args();
-        let i = args.iter().position(|a| a == "--noize").expect("missing --noize");
+        let i = args
+            .iter()
+            .position(|a| a == "--noize")
+            .expect("missing --noize");
         assert_eq!(args.get(i + 1).map(String::as_str), Some("firewall"));
+    }
+
+    #[test]
+    fn v150_options_emit_without_credentials() {
+        let p = ConnectionProfile {
+            dns: "9.9.9.9,1.1.1.1".into(),
+            zero_trust_team: "acme".into(),
+            zero_trust_gateway: true,
+            route_block: "ads.example".into(),
+            route_direct: "private".into(),
+            routes_file: "C:/routes.txt".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            p.as_args(),
+            vec![
+                "--balanced",
+                "-4",
+                "--quick-reconnect",
+                "--noize",
+                "firewall",
+                "--dns",
+                "9.9.9.9,1.1.1.1",
+                "--team",
+                "acme",
+                "--gateway",
+                "--route-block",
+                "ads.example",
+                "--route-direct",
+                "private",
+                "--routes",
+                "C:/routes.txt"
+            ]
+        );
+    }
+
+    #[test]
+    fn zero_trust_email_is_provided_as_an_environment_value() {
+        let p = ConnectionProfile {
+            zero_trust_team: "acme".into(),
+            access_email: "me@example.com".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            p.zero_trust_env(),
+            Some(("AETHER_ACCESS_EMAIL", "me@example.com"))
+        );
+        assert!(!p.as_args().iter().any(|arg| arg.contains("me@example.com")));
     }
 }
 
@@ -272,6 +437,17 @@ impl Default for ConnectionProfile {
             masque_noize: MasqueNoize::Firewall,
             wg_noize: WgNoize::Balanced,
             bind_address: default_bind_address(),
+            dns: String::new(),
+            zero_trust_team: String::new(),
+            zero_trust_auth: ZeroTrustAuth::Email,
+            access_email: String::new(),
+            access_client_id: String::new(),
+            access_client_secret: String::new(),
+            access_token: String::new(),
+            zero_trust_gateway: false,
+            route_block: String::new(),
+            route_direct: String::new(),
+            routes_file: String::new(),
         }
     }
 }
@@ -295,7 +471,16 @@ pub fn load(app: &tauri::AppHandle) -> ConnectionProfile {
 pub fn save(app: &tauri::AppHandle, profile: &ConnectionProfile) {
     use tauri_plugin_store::StoreExt;
     if let Ok(store) = app.store(STORE_FILE) {
-        if let Ok(value) = serde_json::to_value(profile) {
+        // A successful connection profile is useful to remember, but Access
+        // credentials are not. Leave them in process memory only; the next
+        // app launch will ask for them again rather than writing a JWT,
+        // service secret or email address into profile.json.
+        let mut persisted = profile.clone();
+        persisted.access_email.clear();
+        persisted.access_client_id.clear();
+        persisted.access_client_secret.clear();
+        persisted.access_token.clear();
+        if let Ok(value) = serde_json::to_value(persisted) {
             store.set(STORE_KEY, value);
             let _ = store.save();
         }

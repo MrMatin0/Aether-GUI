@@ -6,6 +6,7 @@ import { AdvancedPanel } from "@/components/AdvancedPanel";
 import { CloseToTrayToggle } from "@/components/CloseToTrayToggle";
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { SidecarErrorScreen } from "@/components/SidecarErrorScreen";
+import { AccessCodePrompt } from "@/components/AccessCodePrompt";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TitleBar } from "@/components/TitleBar";
 import { initConnectionListeners, useConnectionStore } from "@/state/connectionStore";
@@ -18,11 +19,13 @@ const SCREEN_TRANSITION = {
 };
 
 function MainScreen() {
+  const attemptId = useConnectionStore((s) => s.attemptId);
   return (
     <div className="relative z-10 flex h-full flex-col items-center overflow-y-auto p-6">
       <div className="flex flex-1 flex-col items-center justify-center gap-6">
         <ConnectButton />
         <ConnectionStatusLine />
+        <AccessCodePrompt key={attemptId} />
       </div>
       <AdvancedPanel />
       <CloseToTrayToggle />

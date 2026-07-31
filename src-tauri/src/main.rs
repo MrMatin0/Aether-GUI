@@ -29,6 +29,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::connect,
             commands::disconnect,
+            commands::submit_access_code,
             commands::get_status,
             commands::get_default_profile,
             commands::set_default_profile,

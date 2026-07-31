@@ -52,7 +52,11 @@ fn resolve_binary(app: &AppHandle) -> Result<PathBuf, AetherError> {
         .path()
         .resource_dir()
         .map_err(|e| AetherError::Internal(e.to_string()))?;
-    let name = if cfg!(windows) { "aether.exe" } else { "aether" };
+    let name = if cfg!(windows) {
+        "aether.exe"
+    } else {
+        "aether"
+    };
     let path = dir.join("binaries").join(name);
     if !path.exists() {
         return Err(AetherError::BinaryMissing(path.display().to_string()));
@@ -67,7 +71,11 @@ fn resolve_binary(app: &AppHandle) -> Result<PathBuf, AetherError> {
     Ok(path)
 }
 
-fn set_state_and_emit(app: &AppHandle, manager: &Arc<Mutex<AetherManager>>, new_state: ConnectionState) {
+fn set_state_and_emit(
+    app: &AppHandle,
+    manager: &Arc<Mutex<AetherManager>>,
+    new_state: ConnectionState,
+) {
     manager.lock().unwrap().state = new_state.clone();
     let _ = app.emit(STATUS_EVENT, &new_state);
 }
@@ -94,7 +102,10 @@ pub fn start_connect(
 
     {
         let mut mgr = manager.lock().unwrap();
-        if !matches!(mgr.state, ConnectionState::Idle | ConnectionState::Error { .. }) {
+        if !matches!(
+            mgr.state,
+            ConnectionState::Idle | ConnectionState::Error { .. }
+        ) {
             return Err(AetherError::AlreadyRunning);
         }
         // Defensive guard independent of the pid-file mechanism in orphan.rs
@@ -139,7 +150,10 @@ fn spawn_and_monitor(
             set_state_and_emit(
                 &app,
                 &manager,
-                ConnectionState::Error { message: e.to_string(), phase: "launching".into() },
+                ConnectionState::Error {
+                    message: e.to_string(),
+                    phase: "launching".into(),
+                },
             );
             return Err(e);
         }
@@ -209,7 +223,10 @@ fn handle_unexpected_failure(
             &app,
             &manager,
             ConnectionState::Error {
-                message: format!("{failure_message} (gave up after {} retries)", status::MAX_AUTO_RETRIES),
+                message: format!(
+                    "{failure_message} (gave up after {} retries)",
+                    status::MAX_AUTO_RETRIES
+                ),
                 phase: phase.into(),
             },
         );
@@ -219,7 +236,10 @@ fn handle_unexpected_failure(
     set_state_and_emit(
         &app,
         &manager,
-        ConnectionState::Reconnecting { attempt, max_attempts: status::MAX_AUTO_RETRIES },
+        ConnectionState::Reconnecting {
+            attempt,
+            max_attempts: status::MAX_AUTO_RETRIES,
+        },
     );
 
     let backoff = status::RETRY_BACKOFF[(attempt - 1) as usize];
@@ -272,7 +292,11 @@ fn monitor_connect(
         }
 
         if !announced_connecting {
-            let done = mgr.session.as_ref().map(|s| s.prompts_done()).unwrap_or(false);
+            let done = mgr
+                .session
+                .as_ref()
+                .map(|s| s.prompts_done())
+                .unwrap_or(false);
             if done {
                 mgr.state = ConnectionState::Connecting;
                 let new_state = mgr.state.clone();
@@ -353,7 +377,10 @@ fn monitor_connected(
     }
 }
 
-pub fn request_disconnect(app: &AppHandle, manager: &Arc<Mutex<AetherManager>>) -> Result<(), AetherError> {
+pub fn request_disconnect(
+    app: &AppHandle,
+    manager: &Arc<Mutex<AetherManager>>,
+) -> Result<(), AetherError> {
     let had_session = {
         let mut mgr = manager.lock().unwrap();
         // Reconnecting has no live session (the old one already exited; the
@@ -406,6 +433,21 @@ pub fn request_disconnect(app: &AppHandle, manager: &Arc<Mutex<AetherManager>>) 
     });
 
     Ok(())
+}
+
+/// Supplies the Cloudflare Access one-time code requested by Aether 1.5.0
+/// during a Zero Trust email enrolment. It is deliberately a narrow command
+/// instead of a generic PTY write endpoint, so the webview can never inject
+/// arbitrary terminal input into the bundled core.
+pub fn submit_access_code(
+    manager: &Arc<Mutex<AetherManager>>,
+    code: String,
+) -> Result<(), AetherError> {
+    let manager = manager
+        .lock()
+        .map_err(|_| AetherError::Internal("Aether state is unavailable".into()))?;
+    let session = manager.session.as_ref().ok_or(AetherError::NotConnected)?;
+    session.send_access_code(&code)
 }
 
 /// Called from `RunEvent::Exit` — the app is quitting regardless, so this

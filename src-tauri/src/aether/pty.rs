@@ -1,4 +1,4 @@
-use super::profiles::ConnectionProfile;
+use super::profiles::{ConnectionProfile, ZeroTrustAuth};
 use super::prompts::{looks_like_choice_prompt, PROMPT_TABLE};
 use crate::error::AetherError;
 use crate::events::{now_millis, LogEvent};
@@ -42,6 +42,26 @@ impl PtySession {
         }
     }
 
+    /// Feeds the one-time code requested by Cloudflare Access during a Zero
+    /// Trust email enrolment. The code never enters the log stream.
+    pub fn send_access_code(&self, code: &str) -> Result<(), AetherError> {
+        let code = code.trim();
+        if code.is_empty() || code.len() > 512 || code.contains(['\r', '\n']) {
+            return Err(AetherError::Internal(
+                "invalid Zero Trust access code".into(),
+            ));
+        }
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| AetherError::Internal("Aether input is unavailable".into()))?;
+        writer
+            .write_all(code.as_bytes())
+            .and_then(|_| writer.write_all(b"\r\n"))
+            .and_then(|_| writer.flush())
+            .map_err(|e| AetherError::Internal(format!("sending Zero Trust access code: {e}")))
+    }
+
     pub fn kill(&mut self) {
         let _ = self.child.kill();
     }
@@ -65,7 +85,12 @@ pub fn spawn(
 ) -> Result<PtySession, AetherError> {
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows: 40, cols: 120, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| AetherError::SpawnFailed(e.to_string()))?;
 
     let mut cmd = CommandBuilder::new(binary);
@@ -79,7 +104,30 @@ pub fn spawn(
     // Env var, not a flag (see ConnectionProfile::masque_http2's doc-comment):
     // any value suppresses Aether 1.2.0's interactive "MASQUE transport"
     // prompt, and only a truthy one selects HTTP/2.
-    cmd.env("AETHER_MASQUE_HTTP2", if profile.masque_http2 { "1" } else { "0" });
+    cmd.env(
+        "AETHER_MASQUE_HTTP2",
+        if profile.masque_http2 { "1" } else { "0" },
+    );
+    // Keep Access credentials out of the process command line. Aether's
+    // flags and environment variables are equivalent, but command arguments
+    // are trivially visible to other local processes on several platforms.
+    match profile.zero_trust_auth {
+        ZeroTrustAuth::Service
+            if !profile.access_client_id.trim().is_empty()
+                && !profile.access_client_secret.trim().is_empty() =>
+        {
+            cmd.env("AETHER_ACCESS_CLIENT_ID", profile.access_client_id.trim());
+            cmd.env(
+                "AETHER_ACCESS_CLIENT_SECRET",
+                profile.access_client_secret.trim(),
+            );
+        }
+        _ => {
+            if let Some((key, value)) = profile.zero_trust_env() {
+                cmd.env(key, value);
+            }
+        }
+    }
 
     let child = pair
         .slave
@@ -108,10 +156,21 @@ pub fn spawn(
     let prompts_done_for_thread = Arc::clone(&prompts_done);
 
     std::thread::spawn(move || {
-        read_loop(reader.as_mut(), writer_for_thread, profile, log_tx, prompts_done_for_thread);
+        read_loop(
+            reader.as_mut(),
+            writer_for_thread,
+            profile,
+            log_tx,
+            prompts_done_for_thread,
+        );
     });
 
-    Ok(PtySession { child, writer, prompts_done, _master: pair.master })
+    Ok(PtySession {
+        child,
+        writer,
+        prompts_done,
+        _master: pair.master,
+    })
 }
 
 fn read_loop(
@@ -125,6 +184,7 @@ fn read_loop(
     let mut current_section: Option<&'static str> = None;
     let mut line_buf = String::new();
     let mut byte_buf = [0u8; 4096];
+    let mut code_prompt_visible = false;
 
     loop {
         let n = match reader.read(&mut byte_buf) {
@@ -151,7 +211,10 @@ fn read_loop(
                     answered.remove(rule.id);
                 }
             }
-            let _ = log_tx.send(LogEvent { line, timestamp: now_millis() });
+            let _ = log_tx.send(LogEvent {
+                line,
+                timestamp: now_millis(),
+            });
         }
 
         // Whatever remains (no newline yet) is either more output still
@@ -161,6 +224,18 @@ fn read_loop(
         // blocking — so answering there would double-feed the next menu once
         // the header completes as a line and gets un-answered above.
         let partial = strip_ansi(&line_buf);
+        // Aether 1.5.0 asks for the Cloudflare Access one-time code without a
+        // terminating newline, so normal line forwarding cannot expose it to
+        // the UI. Emit a single neutral signal line instead; the frontend
+        // displays a code field and calls `submit_access_code` to reply.
+        let access_code_prompt = partial.contains("Enter the code:");
+        if access_code_prompt && !code_prompt_visible {
+            let _ = log_tx.send(LogEvent {
+                line: "[gui] Zero Trust access code required".into(),
+                timestamp: now_millis(),
+            });
+        }
+        code_prompt_visible = access_code_prompt;
         if looks_like_choice_prompt(&partial)
             && !PROMPT_TABLE.iter().any(|r| (r.header_matches)(&partial))
         {
@@ -281,7 +356,10 @@ mod tests {
     #[test]
     fn cr_overwrite_drops_spinner_frames() {
         let mut buf = String::new();
-        assert_eq!(feed(&mut buf, "scan 1%\rscan 2%\rscan 3%"), Vec::<String>::new());
+        assert_eq!(
+            feed(&mut buf, "scan 1%\rscan 2%\rscan 3%"),
+            Vec::<String>::new()
+        );
         assert_eq!(buf, "scan 3%"); // only the live frame survives
         assert_eq!(feed(&mut buf, "\rscan done\n"), ["scan done"]);
         assert_eq!(buf, "");

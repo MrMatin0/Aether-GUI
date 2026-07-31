@@ -15,6 +15,7 @@ export type ScanMode = "turbo" | "balanced" | "thorough" | "stealth" | "ironclad
 export type IpVersion = "v4" | "v6" | "both";
 export type MasqueNoize = "firewall" | "gfw" | "off";
 export type WgNoize = "balanced" | "aggressive" | "light" | "off";
+export type ZeroTrustAuth = "email" | "service" | "token";
 
 export interface ConnectionProfile {
   protocol: Protocol;
@@ -32,6 +33,22 @@ export interface ConnectionProfile {
   wg_noize: WgNoize;
   /** Local SOCKS5 listen address (--bind). Default 127.0.0.1:1819. */
   bind_address: string;
+  /** Aether ≥1.5.0: optional comma-separated DNS resolvers inside the tunnel. */
+  dns: string;
+  /** Cloudflare Zero Trust team. Empty keeps the normal consumer WARP flow. */
+  zero_trust_team: string;
+  zero_trust_auth: ZeroTrustAuth;
+  /** Zero Trust credentials stay in memory only; they are never persisted. */
+  access_email: string;
+  access_client_id: string;
+  access_client_secret: string;
+  access_token: string;
+  /** Route HTTP/HTTPS through the organization's Gateway proxy. */
+  zero_trust_gateway: boolean;
+  /** Aether ≥1.5.0 traffic-routing rules. */
+  route_block: string;
+  route_direct: string;
+  routes_file: string;
 }
 
 export interface LogLine {

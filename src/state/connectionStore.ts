@@ -7,6 +7,7 @@ import type {
   LogLine,
   MasqueNoize,
   WgNoize,
+  ZeroTrustAuth,
 } from "@/types/connection";
 
 const MAX_LOG_LINES = 500;
@@ -21,6 +22,8 @@ interface ConnectionState {
    * lets the UI show real progress instead of an indefinite spinner. Reset
    * on every fresh attempt since it can differ by protocol/scan mode. */
   scanBudgetSecs: number | null;
+  /** Monotonic key for controls that must reset between explicit connects. */
+  attemptId: number;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   setProtocol: (protocol: ConnectionProfile["protocol"]) => void;
@@ -31,6 +34,17 @@ interface ConnectionState {
   setMasqueNoize: (masque_noize: MasqueNoize) => void;
   setWgNoize: (wg_noize: WgNoize) => void;
   setBindAddress: (bind_address: string) => void;
+  setDns: (dns: string) => void;
+  setZeroTrustTeam: (zero_trust_team: string) => void;
+  setZeroTrustAuth: (zero_trust_auth: ZeroTrustAuth) => void;
+  setAccessEmail: (access_email: string) => void;
+  setAccessClientId: (access_client_id: string) => void;
+  setAccessClientSecret: (access_client_secret: string) => void;
+  setAccessToken: (access_token: string) => void;
+  setZeroTrustGateway: (zero_trust_gateway: boolean) => void;
+  setRouteBlock: (route_block: string) => void;
+  setRouteDirect: (route_direct: string) => void;
+  setRoutesFile: (routes_file: string) => void;
   retryAfterSidecarError: () => void;
 }
 
@@ -45,12 +59,27 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
     masque_noize: "firewall",
     wg_noize: "balanced",
     bind_address: "127.0.0.1:1819",
+    dns: "",
+    zero_trust_team: "",
+    zero_trust_auth: "email",
+    access_email: "",
+    access_client_id: "",
+    access_client_secret: "",
+    access_token: "",
+    zero_trust_gateway: false,
+    route_block: "",
+    route_direct: "",
+    routes_file: "",
   },
   logs: [],
   sidecarError: null,
   scanBudgetSecs: null,
+  attemptId: 0,
 
   connect: async () => {
+    // A fresh user-initiated attempt should not inherit stale log-driven UI
+    // prompts (notably a previous Zero Trust email-code request).
+    set((s) => ({ logs: [], scanBudgetSecs: null, attemptId: s.attemptId + 1 }));
     try {
       await invoke("connect", { profileOverride: get().profile });
     } catch (e) {
@@ -99,6 +128,47 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
 
   setBindAddress: (bind_address) =>
     set((s) => ({ profile: { ...s.profile, bind_address } })),
+
+  setDns: (dns) => set((s) => ({ profile: { ...s.profile, dns } })),
+
+  setZeroTrustTeam: (zero_trust_team) =>
+    set((s) => ({ profile: { ...s.profile, zero_trust_team } })),
+
+  setZeroTrustAuth: (zero_trust_auth) =>
+    set((s) => ({
+      profile: {
+        ...s.profile,
+        zero_trust_auth,
+        access_email: "",
+        access_client_id: "",
+        access_client_secret: "",
+        access_token: "",
+      },
+    })),
+
+  setAccessEmail: (access_email) =>
+    set((s) => ({ profile: { ...s.profile, access_email } })),
+
+  setAccessClientId: (access_client_id) =>
+    set((s) => ({ profile: { ...s.profile, access_client_id } })),
+
+  setAccessClientSecret: (access_client_secret) =>
+    set((s) => ({ profile: { ...s.profile, access_client_secret } })),
+
+  setAccessToken: (access_token) =>
+    set((s) => ({ profile: { ...s.profile, access_token } })),
+
+  setZeroTrustGateway: (zero_trust_gateway) =>
+    set((s) => ({ profile: { ...s.profile, zero_trust_gateway } })),
+
+  setRouteBlock: (route_block) =>
+    set((s) => ({ profile: { ...s.profile, route_block } })),
+
+  setRouteDirect: (route_direct) =>
+    set((s) => ({ profile: { ...s.profile, route_direct } })),
+
+  setRoutesFile: (routes_file) =>
+    set((s) => ({ profile: { ...s.profile, routes_file } })),
 
   // Clears the fallback screen so the user can attempt Connect again (e.g.
   // after fixing a broken install) — the next connect() call will re-set
