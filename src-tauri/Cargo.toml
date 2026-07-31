@@ -12,8 +12,20 @@ tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-store = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-portable-pty = "0.8"
-thiserror = "1"
+portable-pty = "0.9"
+thiserror = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
+# The shipped release build had no profile overrides at all: opt-level 3, 16
+# codegen units, no LTO, full symbols. For a deliberately lightweight tray app
+# whose hot path is a 400ms poll loop, size and cold start matter far more than
+# peak throughput. These settings typically cut 30-45% off the Windows binary.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+incremental = false
