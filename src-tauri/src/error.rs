@@ -1,3 +1,4 @@
+use serde::ser::{Serialize, SerializeStruct, Serializer};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,14 +17,27 @@ pub enum AetherError {
     Internal(String),
 }
 
-// Tauri v2 command errors must be Serialize; Aether-GUI has no need to
-// distinguish error variants on the frontend beyond the message text, so
-// this serializes to a plain string rather than a tagged enum.
-impl serde::Serialize for AetherError {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
+impl AetherError {
+    /// Stable machine-readable discriminant. The frontend branches on this
+    /// instead of substring-matching the human-readable message, so rewording
+    /// a `#[error]` string can never silently break UI routing.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::AlreadyRunning => "already_running",
+            Self::BinaryMissing(_) => "binary_missing",
+            Self::SpawnFailed(_) => "spawn_failed",
+            Self::PortInUse(_) => "port_in_use",
+            Self::NotConnected => "not_connected",
+            Self::Internal(_) => "internal",
+        }
+    }
+}
+
+impl Serialize for AetherError {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut s = serializer.serialize_struct("AetherError", 2)?;
+        s.serialize_field("code", self.code())?;
+        s.serialize_field("message", &self.to_string())?;
+        s.end()
     }
 }
